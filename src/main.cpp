@@ -3,31 +3,32 @@
 
 // ================= НАСТРОЙКИ =================
 const int steeringWheelPin = 34;  // Аналоговый вход руля
-const int gasButtonPin = 25;      // Кнопка газа (подключена к GND)
+const int gasButtonPin = 25;      // Кнопка газа
+const int brakeButtonPin = 26;    // Кнопка тормоза (L2)
 
-// ★★★ ИЗМЕРЬТЕ И ВСТАВЬТЕ СЮДА СВОИ ЗНАЧЕНИЯ ★★★
-const int MIN_RAW = 0;   // Крайний левый упор
-const int MAX_RAW = 4095;  // Крайний правый упор
-
-// Ширина мёртвой зоны вокруг центра (чем больше, тем меньше дрожи)
-const int DEAD_ZONE = 2026;   // Подберите от 80 до 250
+// Ширина мёртвой зоны вокруг центра (в отсчётах АЦП, можно менять)
+const int DEAD_ZONE = 150;   // Увеличьте это значение, если руль "дрожит"
 
 // ====== ОСТАЛЬНОЕ НЕ ТРОГАТЬ ======
 BleGamepad bleGamepad("ESP32 Racing Wheel", "ESP32 Community", 100);
 
-int centerRaw;       // запомненный центр
-int leftLimit, rightLimit;
+// Центр руля, запомненный при включении
+int centerRaw = 2048;        // будет переопределён в setup()
+int leftLimit, rightLimit;   // границы зон
 
 // Газ
 bool lastGasButtonState = HIGH;
+// Тормоз
+bool lastBrakeButtonState = HIGH;
 
 void setup() {
   Serial.begin(115200);
   pinMode(steeringWheelPin, INPUT);
   pinMode(gasButtonPin, INPUT_PULLUP);
+  pinMode(brakeButtonPin, INPUT_PULLUP);   // новый пин тормоза
 
-  // --- Калибровка центра (не трогайте руль 1-2 секунды после включения) ---
-  delay(500);
+  // --- Калибровка центра (не трогайте руль первые секунды!) ---
+  delay(500); // даём питанию устаканиться
   long sum = 0;
   const int samples = 50;
   for (int i = 0; i < samples; i++) {
@@ -36,32 +37,42 @@ void setup() {
   }
   centerRaw = sum / samples;
 
-  leftLimit  = centerRaw - DEAD_ZONE;
-  rightLimit = centerRaw + DEAD_ZONE;
+  // Вычисляем границы зон относительно центра
+  leftLimit  = centerRaw - DEAD_ZONE;   // всё, что меньше – лево
+  rightLimit = centerRaw + DEAD_ZONE;   // всё, что больше – право
 
-  Serial.print("Центр: "); Serial.println(centerRaw);
-  Serial.print("Левая зона: "); Serial.print(MIN_RAW); Serial.print(" ... "); Serial.println(leftLimit);
-  Serial.print("Правая зона: "); Serial.print(rightLimit); Serial.print(" ... "); Serial.println(MAX_RAW);
+  Serial.print("Центр откалиброван: ");
+  Serial.println(centerRaw);
+  Serial.print("Левая зона: 0 ... ");
+  Serial.println(leftLimit);
+  Serial.print("Центральная зона: ");
+  Serial.print(leftLimit);
+  Serial.print(" ... ");
+  Serial.println(rightLimit);
+  Serial.print("Правая зона: ");
+  Serial.print(rightLimit);
+  Serial.println(" ... 4095");
 
   bleGamepad.begin();
-  Serial.println("BLE Gamepad готов");
+  Serial.println("BLE Gamepad готов (без фильтра, с автокалибровкой)");
 }
 
 void loop() {
   if (bleGamepad.isConnected()) {
 
-    // --- РУЛЬ ---
+    // --- РУЛЬ (без фильтра) ---
     int raw = analogRead(steeringWheelPin);
+
     int steering = 0;
 
     if (raw < leftLimit) {
-      // ЛЕВО: шкала от leftLimit до MIN_RAW -> -32767..0
-      steering = map(raw, leftLimit, MIN_RAW, 0, -32767);
+      // ЛЕВО: масштабируем от leftLimit (центр) до 0 (крайне левое положение)
+      steering = map(raw, leftLimit, 0, -32767, 0);
       steering = constrain(steering, -32767, 0);
     }
     else if (raw > rightLimit) {
-      // ПРАВО: шкала от rightLimit до MAX_RAW -> 0..32767
-      steering = map(raw, rightLimit, MAX_RAW, 0, 32767);
+      // ПРАВО: масштабируем от rightLimit до 4095 (крайне правое положение)
+      steering = map(raw, rightLimit, 4095, 0, 32767);
       steering = constrain(steering, 0, 32767);
     }
     else {
@@ -73,16 +84,33 @@ void loop() {
 
     // --- ГАЗ (R2) ---
     bool gasButtonState = digitalRead(gasButtonPin);
+
     if (gasButtonState == LOW && lastGasButtonState == HIGH) {
-      bleGamepad.press(BUTTON_8);
+      bleGamepad.press(BUTTON_8);  // R2
     }
     else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
       bleGamepad.release(BUTTON_8);
     }
+
     lastGasButtonState = gasButtonState;
 
-    // Отладка (раскомментируйте, если нужно)
-    // Serial.print("RAW: "); Serial.print(raw); Serial.print(" -> "); Serial.println(steering);
+    // --- ТОРМОЗ (L2) ---
+    bool brakeButtonState = digitalRead(brakeButtonPin);
+
+    if (brakeButtonState == LOW && lastBrakeButtonState == HIGH) {
+      bleGamepad.press(BUTTON_7);  // L2
+    }
+    else if (brakeButtonState == HIGH && lastBrakeButtonState == LOW) {
+      bleGamepad.release(BUTTON_7);
+    }
+
+    lastBrakeButtonState = brakeButtonState;
+
+    // --- Диагностика (вывод в Serial) ---
+    Serial.print("RAW: ");
+    Serial.print(raw);
+    Serial.print(" -> Steering: ");
+    Serial.println(steering);
 
     delay(10);
   }
