@@ -5,6 +5,7 @@
 const int steeringWheelPin = 34;  // Аналоговый вход руля
 const int gasButtonPin = 25;      // Кнопка газа
 const int brakeButtonPin = 26;    // Кнопка тормоза (L2)
+const int yButtonPin = 27;        // Кнопка Y
 
 // Ширина мёртвой зоны вокруг центра (в отсчётах АЦП, можно менять)
 const int DEAD_ZONE = 150;   // Увеличьте это значение, если руль "дрожит"
@@ -20,12 +21,15 @@ int leftLimit, rightLimit;   // границы зон
 bool lastGasButtonState = HIGH;
 // Тормоз
 bool lastBrakeButtonState = HIGH;
+// Y
+bool lastYButtonState = HIGH;
 
 void setup() {
   Serial.begin(115200);
   pinMode(steeringWheelPin, INPUT);
   pinMode(gasButtonPin, INPUT_PULLUP);
-  pinMode(brakeButtonPin, INPUT_PULLUP);   // новый пин тормоза
+  pinMode(brakeButtonPin, INPUT_PULLUP);
+  pinMode(yButtonPin, INPUT_PULLUP);
 
   // --- Калибровка центра (не трогайте руль первые секунды!) ---
   delay(500); // даём питанию устаканиться
@@ -105,6 +109,18 @@ void loop() {
     }
 
     lastBrakeButtonState = brakeButtonState;
+
+    // --- КНОПКА Y ---
+    bool yButtonState = digitalRead(yButtonPin);
+
+    if (yButtonState == LOW && lastYButtonState == HIGH) {
+      bleGamepad.press(BUTTON_4);  // Y
+    }
+    else if (yButtonState == HIGH && lastYButtonState == LOW) {
+      bleGamepad.release(BUTTON_4);
+    }
+
+    lastYButtonState = yButtonState;
 
     // --- Диагностика (вывод в Serial) ---
     Serial.print("RAW: ");
