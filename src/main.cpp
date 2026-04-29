@@ -5,7 +5,7 @@
 const int steeringWheelPin = 34;  // Аналоговый вход руля (подстроечный резистор 10 кОм)
 const int gasButtonPin = 25;      // Кнопка газа (подключена к GND, используется внутренняя подтяжка)
 
-// Опциональный светодиод на GPIO 2 (раскомментируйте строку ниже, если подключили)
+// Опциональный светодиод на GPIO 2 (раскомментируйте, если подключили)
 // #define ENABLE_LED
 #ifdef ENABLE_LED
 const int ledPin = 2;
@@ -24,6 +24,12 @@ int average = 0;
 // Переменные для кнопки газа и предотвращения дребезга
 bool gasPressed = false;
 bool lastGasButtonState = HIGH;
+
+// Переменные для отладочного вывода
+int lastReportedSteering = 0;          // Предыдущее отправленное значение руля
+unsigned long lastDebugPrint = 0;      // Время последнего вывода отладки
+const unsigned long debugInterval = 500; // Минимальный интервал между выводами (мс)
+bool bleWasConnected = false;          // Предыдущее состояние BLE-подключения
 
 void setup() {
   Serial.begin(115200);
@@ -49,14 +55,27 @@ void setup() {
 }
 
 void loop() {
-  if (bleGamepad.isConnected()) {
-    #ifdef ENABLE_LED
-    digitalWrite(ledPin, HIGH);
-    #endif
+  bool currentlyConnected = bleGamepad.isConnected();
 
+  // --- Отслеживание изменения статуса BLE-подключения ---
+  if (currentlyConnected != bleWasConnected) {
+    bleWasConnected = currentlyConnected;
+    if (currentlyConnected) {
+      Serial.println(">>> BLE ПОДКЛЮЧЕНО <<<");
+      #ifdef ENABLE_LED
+      digitalWrite(ledPin, HIGH);
+      #endif
+    } else {
+      Serial.println("--- BLE ОТКЛЮЧЕНО ---");
+      #ifdef ENABLE_LED
+      digitalWrite(ledPin, LOW);
+      #endif
+    }
+  }
+
+  if (currentlyConnected) {
     // --- Руль (ось X) ---
     int raw = analogRead(steeringWheelPin);
-    // Бегущее среднее
     total = total - readings[readIndex];
     readings[readIndex] = raw;
     total = total + readings[readIndex];
@@ -73,21 +92,30 @@ void loop() {
       // Кнопка только что нажата
       gasPressed = true;
       bleGamepad.press(BUTTON_8); // Нажимаем кнопку R2
-      Serial.println("Газ нажат");
+      Serial.println("ГАЗ НАЖАТ");
     } 
     else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
       // Кнопка только что отпущена
       gasPressed = false;
       bleGamepad.release(BUTTON_8); // Отпускаем кнопку R2
-      Serial.println("Газ отпущен");
+      Serial.println("ГАЗ ОТПУЩЕН");
     }
     
     lastGasButtonState = gasButtonState;
+
+    // --- Периодический вывод значений руля (только при изменении более чем на 500) ---
+    if (abs(steering - lastReportedSteering) > 500) {
+      if (millis() - lastDebugPrint > debugInterval) {
+        Serial.print("Руль: ");
+        Serial.println(steering);
+        lastReportedSteering = steering;
+        lastDebugPrint = millis();
+      }
+    }
+
     delay(10);
   } else {
-    #ifdef ENABLE_LED
-    digitalWrite(ledPin, LOW);
-    #endif
+    // Если BLE не подключено – экономим ресурсы
     delay(1000);
   }
 }
