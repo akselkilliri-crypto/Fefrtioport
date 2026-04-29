@@ -3,7 +3,7 @@
 
 // ================= НАСТРОЙКИ =================
 const int steeringWheelPin = 34;  // Аналоговый вход руля
-const int gasButtonPin = 25;      // Кнопка газа (GND ➜ срабатывание)
+const int gasButtonPin = 25;      // Кнопка газа (GND – нажатие)
 
 // ================= ЗОНЫ РУЛЯ =================
 const int ZONE_CENTER_LOW  = 1400;  // нижняя граница центра
@@ -16,18 +16,22 @@ const int ZONE_CENTER_HIGH = 2050;  // верхняя граница центр�
 BleGamepad bleGamepad("ESP32 Racing Wheel", "ESP32 Community", 100);
 
 // EMA-фильтр для руля
-float emaSteeringValue = 1800.0;  // начальное приближение (середина зоны)
+float emaSteeringValue = 1800.0;  // начальное приближение
 const float emaAlpha = 0.1;       // коэффициент сглаживания
 
 // Газ
 bool lastGasButtonState = HIGH;
+
+// Для отладочного вывода
+unsigned long lastPrint = 0;
+const unsigned long printInterval = 200;  // раз в 200 мс
 
 void setup() {
   Serial.begin(115200);
   pinMode(steeringWheelPin, INPUT);
   pinMode(gasButtonPin, INPUT_PULLUP);
 
-  // Начальная калибровка EMA-фильтра
+  // Начальная калибровка фильтра
   long sum = 0;
   for (int i = 0; i < 50; i++) {
     sum += analogRead(steeringWheelPin);
@@ -77,6 +81,19 @@ void loop() {
     }
 
     lastGasButtonState = gasButtonState;
+
+    // --- ОТЛАДКА: вывод раз в 200 мс ---
+    if (millis() - lastPrint > printInterval) {
+      Serial.print("Потенциометр: ");
+      Serial.print(raw);
+      Serial.print("\tГаз: ");
+      if (gasButtonState == LOW) {
+        Serial.println("НАЖАТ");
+      } else {
+        Serial.println("отпущен");
+      }
+      lastPrint = millis();
+    }
 
     delay(10);
   }
