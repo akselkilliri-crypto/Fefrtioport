@@ -6,7 +6,7 @@ const int steeringWheelPin = 34;  // Аналоговый вход руля
 const int gasButtonPin = 25;      // Кнопка газа
 
 // Ширина мёртвой зоны вокруг центра (в отсчётах АЦП, можно менять)
-const int DEAD_ZONE = 80;   // чем больше, тем шире центральное "окно"
+const int DEAD_ZONE = 150;   // Увеличьте это значение, если руль "дрожит"
 
 // ====== ОСТАЛЬНОЕ НЕ ТРОГАТЬ ======
 BleGamepad bleGamepad("ESP32 Racing Wheel", "ESP32 Community", 100);
@@ -63,9 +63,8 @@ void loop() {
 
     if (raw < leftLimit) {
       // ЛЕВО: масштабируем от leftLimit (центр) до 0 (крайне левое положение)
-      steering = map(raw, leftLimit, 0, 0, 32767);
-      steering = constrain(steering, 0, 32767);
-      steering = -steering;  // лево – отрицательные значения оси X
+      steering = map(raw, leftLimit, 0, -32767, 0);
+      steering = constrain(steering, -32767, 0);
     }
     else if (raw > rightLimit) {
       // ПРАВО: масштабируем от rightLimit до 4095 (крайне правое положение)
@@ -90,6 +89,12 @@ void loop() {
     }
 
     lastGasButtonState = gasButtonState;
+
+    // --- Диагностика (вывод в Serial) ---
+    Serial.print("RAW: ");
+    Serial.print(raw);
+    Serial.print(" -> Steering: ");
+    Serial.println(steering);
 
     delay(10);
   }
