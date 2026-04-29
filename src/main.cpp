@@ -5,7 +5,7 @@
 const int steeringWheelPin = 34;  // Аналоговый вход руля (подстроечный резистор 10 кОм)
 const int gasButtonPin = 25;      // Кнопка газа (подключена к GND, используется внутренняя подтяжка)
 
-// Опциональный светодиод на GPIO 2 (раскомментируйте, если подключили)
+// Опциональный светодиод на GPIO 2 (раскомментируйте строку ниже, если подключили)
 // #define ENABLE_LED
 #ifdef ENABLE_LED
 const int ledPin = 2;
@@ -14,22 +14,20 @@ const int ledPin = 2;
 // ====== ДАЛЕЕ КОД ЛУЧШЕ НЕ ТРОГАТЬ ======
 BleGamepad bleGamepad("ESP32 Racing Wheel", "ESP32 Community", 100);
 
-// Сглаживание руля
-const int numReadings = 10;
-int readings[numReadings];
-int readIndex = 0;
-int total = 0;
-int average = 0;
+// --- Переменные для руля (улучшенная фильтрация и адаптивный центр) ---
+int centerSteeringValue = 2048;   // Значение центра, запомненное при старте
+float emaSteeringValue = 2048.0;  // Текущее значение EMA фильтра
+float emaAlpha = 0.1;             // Коэффициент фильтрации EMA (0.0 - 1.0)
+int deadZone = 200;               // Мертвая зона в отсчетах АЦП
 
-// Переменные для кнопки газа и предотвращения дребезга
+// --- Переменные для кнопки газа (возвращён стабильный цифровой метод) ---
 bool gasPressed = false;
 bool lastGasButtonState = HIGH;
 
-// Переменные для отладочного вывода
-int lastReportedSteering = 0;          // Предыдущее отправленное значение руля
-unsigned long lastDebugPrint = 0;      // Время последнего вывода отладки
-const unsigned long debugInterval = 500; // Минимальный интервал между выводами (мс)
-bool bleWasConnected = false;          // Предыдущее состояние BLE-подключения
+// --- Переменные для отладки ---
+int lastReportedSteering = 0;
+unsigned long lastDebugPrint = 0;
+const unsigned long debugInterval = 500;
 
 void setup() {
   Serial.begin(115200);
@@ -40,8 +38,26 @@ void setup() {
   pinMode(ledPin, OUTPUT);
   #endif
 
-  // Инициализация массива усреднения
-  for (int i = 0; i < numReadings; i++) readings[i] = 0;
+  // --- Калибровка центрального положения руля ---
+  Serial.println("Калибровка центра руля...");
+  delay(500); // Небольшая задержка для стабилизации питания
+  
+  long sum = 0;
+  const int calibrationSamples = 50;
+  for (int i = 0; i < calibrationSamples; i++) {
+    sum += analogRead(steeringWheelPin);
+    delay(10);
+  }
+  centerSteeringValue = sum / calibrationSamples;
+  
+  // Инициализация фильтра значением центра
+  emaSteeringValue = (float)centerSteeringValue;
+
+  Serial.print("Центр руля откалиброван: ");
+  Serial.println(centerSteeringValue);
+  Serial.println("Отклонение руля влево: (центр - значение)");
+  Serial.println("Отклонение руля вправо: (центр + значение)");
+  Serial.println("BLE Gamepad готов к подключению");
 
   bleGamepad.begin();
 
@@ -50,48 +66,48 @@ void setup() {
   delay(500);
   digitalWrite(ledPin, LOW);
   #endif
-
-  Serial.println("BLE Gamepad готов к подключению");
 }
 
 void loop() {
-  bool currentlyConnected = bleGamepad.isConnected();
+  if (bleGamepad.isConnected()) {
+    #ifdef ENABLE_LED
+    digitalWrite(ledPin, HIGH);
+    #endif
 
-  // --- Отслеживание изменения статуса BLE-подключения ---
-  if (currentlyConnected != bleWasConnected) {
-    bleWasConnected = currentlyConnected;
-    if (currentlyConnected) {
-      Serial.println(">>> BLE ПОДКЛЮЧЕНО <<<");
-      #ifdef ENABLE_LED
-      digitalWrite(ledPin, HIGH);
-      #endif
-    } else {
-      Serial.println("--- BLE ОТКЛЮЧЕНО ---");
-      #ifdef ENABLE_LED
-      digitalWrite(ledPin, LOW);
-      #endif
-    }
-  }
-
-  if (currentlyConnected) {
     // --- Руль (ось X) ---
     int raw = analogRead(steeringWheelPin);
-    total = total - readings[readIndex];
-    readings[readIndex] = raw;
-    total = total + readings[readIndex];
-    readIndex = (readIndex + 1) % numReadings;
-    average = total / numReadings;
+    
+    // Применяем экспоненциальное бегущее среднее (EMA) для сглаживания
+    emaSteeringValue = (emaAlpha * raw) + ((1 - emaAlpha) * emaSteeringValue);
+    int smoothedValue = (int)emaSteeringValue;
+    
+    // Вычисляем отклонение от центра
+    int deviation = smoothedValue - centerSteeringValue;
+    
+    // Применяем мертвую зону
+    if (abs(deviation) < deadZone) {
+      deviation = 0;
+    }
 
-    int steering = map(average, 0, 4095, -32767, 32767);
+    // Масштабируем отклонение в диапазон оси X (-32767 до 32767)
+    int steering = 0;
+    if (deviation > 0) {
+      // Отклонение вправо
+      steering = map(deviation, 0, 4095 - centerSteeringValue, 0, 32767);
+    } else if (deviation < 0) {
+      // Отклонение влево
+      steering = map(deviation, -centerSteeringValue, 0, -32767, 0);
+    }
+    
     bleGamepad.setX(steering);
 
-    // --- Кнопка газа (R2) ---
+    // --- Кнопка газа (R2) – надёжный цифровой метод ---
     bool gasButtonState = digitalRead(gasButtonPin);
     
     if (gasButtonState == LOW && lastGasButtonState == HIGH) {
       // Кнопка только что нажата
       gasPressed = true;
-      bleGamepad.press(BUTTON_8); // Нажимаем кнопку R2
+      bleGamepad.press(BUTTON_8);   // Нажимаем кнопку R2
       Serial.println("ГАЗ НАЖАТ");
     } 
     else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
@@ -103,10 +119,12 @@ void loop() {
     
     lastGasButtonState = gasButtonState;
 
-    // --- Периодический вывод значений руля (только при изменении более чем на 500) ---
+    // --- Отладочный вывод (значения руля при изменении) ---
     if (abs(steering - lastReportedSteering) > 500) {
       if (millis() - lastDebugPrint > debugInterval) {
-        Serial.print("Руль: ");
+        Serial.print("Руль (отклонение): ");
+        Serial.print(deviation);
+        Serial.print(" -> Ось X: ");
         Serial.println(steering);
         lastReportedSteering = steering;
         lastDebugPrint = millis();
@@ -115,7 +133,9 @@ void loop() {
 
     delay(10);
   } else {
-    // Если BLE не подключено – экономим ресурсы
+    #ifdef ENABLE_LED
+    digitalWrite(ledPin, LOW);
+    #endif
     delay(1000);
   }
 }
