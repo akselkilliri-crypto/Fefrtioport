@@ -4,7 +4,6 @@
 // ================= НАСТРОЙКИ (меняйте при необходимости) =================
 const int steeringWheelPin = 34;  // Аналоговый вход руля (подстроечный резистор 10 кОм)
 const int gasButtonPin = 25;      // Кнопка газа (подключена к GND, используется внутренняя подтяжка)
-// Правый триггер (R2) управляется кнопкой газа: при нажатии отправляется максимальное значение
 
 // Опциональный светодиод на GPIO 2 (раскомментируйте строку ниже, если подключили)
 // #define ENABLE_LED
@@ -21,6 +20,10 @@ int readings[numReadings];
 int readIndex = 0;
 int total = 0;
 int average = 0;
+
+// Переменные для кнопки газа и предотвращения дребезга
+bool gasPressed = false;
+bool lastGasButtonState = HIGH;
 
 void setup() {
   Serial.begin(115200);
@@ -63,15 +66,23 @@ void loop() {
     int steering = map(average, 0, 4095, -32767, 32767);
     bleGamepad.setX(steering);
 
-    // --- Правый триггер (газ) ---
-    if (digitalRead(gasButtonPin) == LOW) {
-      // Кнопка нажата – эмулируем полностью нажатый правый триггер (R2)
-      bleGamepad.setRightTrigger(1023);
-    } else {
-      // Отпущена – триггер в нуле
-      bleGamepad.setRightTrigger(0);
+    // --- Кнопка газа (R2) ---
+    bool gasButtonState = digitalRead(gasButtonPin);
+    
+    if (gasButtonState == LOW && lastGasButtonState == HIGH) {
+      // Кнопка только что нажата
+      gasPressed = true;
+      bleGamepad.press(BUTTON_8); // Нажимаем кнопку R2
+      Serial.println("Газ нажат");
+    } 
+    else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
+      // Кнопка только что отпущена
+      gasPressed = false;
+      bleGamepad.release(BUTTON_8); // Отпускаем кнопку R2
+      Serial.println("Газ отпущен");
     }
-
+    
+    lastGasButtonState = gasButtonState;
     delay(10);
   } else {
     #ifdef ENABLE_LED
