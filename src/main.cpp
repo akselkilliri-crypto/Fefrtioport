@@ -1,141 +1,86 @@
 #include <Arduino.h>
 #include <BleGamepad.h>
 
-// ================= НАСТРОЙКИ (меняйте при необходимости) =================
-const int steeringWheelPin = 34;  // Аналоговый вход руля (подстроечный резистор 10 кОм)
-const int gasButtonPin = 25;      // Кнопка газа (подключена к GND, используется внутренняя подтяжка)
+// ================= НАСТРОЙКИ =================
+const int steeringWheelPin = 34;  // Аналоговый вход руля
+const int gasButtonPin = 25;      // Кнопка газа (GND ➜ срабатывание)
 
-// Опциональный светодиод на GPIO 2 (раскомментируйте строку ниже, если подключили)
-// #define ENABLE_LED
-#ifdef ENABLE_LED
-const int ledPin = 2;
-#endif
+// ================= ЗОНЫ РУЛЯ =================
+const int ZONE_CENTER_LOW  = 1400;  // нижняя граница центра
+const int ZONE_CENTER_HIGH = 2050;  // верхняя граница центра
+// < 1400  – лево
+// 1400-2050 – центр
+// > 2050  – право
 
-// ====== ДАЛЕЕ КОД ЛУЧШЕ НЕ ТРОГАТЬ ======
+// ====== ОСТАЛЬНОЕ НЕ ТРОГАТЬ ======
 BleGamepad bleGamepad("ESP32 Racing Wheel", "ESP32 Community", 100);
 
-// --- Переменные для руля (улучшенная фильтрация и адаптивный центр) ---
-int centerSteeringValue = 2048;   // Значение центра, запомненное при старте
-float emaSteeringValue = 2048.0;  // Текущее значение EMA фильтра
-float emaAlpha = 0.1;             // Коэффициент фильтрации EMA (0.0 - 1.0)
-int deadZone = 200;               // Мертвая зона в отсчетах АЦП
+// EMA-фильтр для руля
+float emaSteeringValue = 1800.0;  // начальное приближение (середина зоны)
+const float emaAlpha = 0.1;       // коэффициент сглаживания
 
-// --- Переменные для кнопки газа (возвращён стабильный цифровой метод) ---
-bool gasPressed = false;
+// Газ
 bool lastGasButtonState = HIGH;
-
-// --- Переменные для отладки ---
-int lastReportedSteering = 0;
-unsigned long lastDebugPrint = 0;
-const unsigned long debugInterval = 500;
 
 void setup() {
   Serial.begin(115200);
   pinMode(steeringWheelPin, INPUT);
   pinMode(gasButtonPin, INPUT_PULLUP);
 
-  #ifdef ENABLE_LED
-  pinMode(ledPin, OUTPUT);
-  #endif
-
-  // --- Калибровка центрального положения руля ---
-  Serial.println("Калибровка центра руля...");
-  delay(500); // Небольшая задержка для стабилизации питания
-  
+  // Начальная калибровка EMA-фильтра
   long sum = 0;
-  const int calibrationSamples = 50;
-  for (int i = 0; i < calibrationSamples; i++) {
+  for (int i = 0; i < 50; i++) {
     sum += analogRead(steeringWheelPin);
-    delay(10);
+    delay(5);
   }
-  centerSteeringValue = sum / calibrationSamples;
-  
-  // Инициализация фильтра значением центра
-  emaSteeringValue = (float)centerSteeringValue;
-
-  Serial.print("Центр руля откалиброван: ");
-  Serial.println(centerSteeringValue);
-  Serial.println("Отклонение руля влево: (центр - значение)");
-  Serial.println("Отклонение руля вправо: (центр + значение)");
-  Serial.println("BLE Gamepad готов к подключению");
+  emaSteeringValue = (float)sum / 50.0;
 
   bleGamepad.begin();
-
-  #ifdef ENABLE_LED
-  digitalWrite(ledPin, HIGH);
-  delay(500);
-  digitalWrite(ledPin, LOW);
-  #endif
+  Serial.println("BLE Gamepad готов");
 }
 
 void loop() {
   if (bleGamepad.isConnected()) {
-    #ifdef ENABLE_LED
-    digitalWrite(ledPin, HIGH);
-    #endif
 
-    // --- Руль (ось X) ---
+    // --- РУЛЬ ---
     int raw = analogRead(steeringWheelPin);
-    
-    // Применяем экспоненциальное бегущее среднее (EMA) для сглаживания
     emaSteeringValue = (emaAlpha * raw) + ((1 - emaAlpha) * emaSteeringValue);
-    int smoothedValue = (int)emaSteeringValue;
-    
-    // Вычисляем отклонение от центра
-    int deviation = smoothedValue - centerSteeringValue;
-    
-    // Применяем мертвую зону
-    if (abs(deviation) < deadZone) {
-      deviation = 0;
+    int smooth = (int)emaSteeringValue;
+
+    int steering = 0;
+
+    if (smooth < ZONE_CENTER_LOW) {
+      // ЛЕВО: чем меньше значение, тем сильнее поворот
+      steering = map(smooth, ZONE_CENTER_LOW, 0, 0, -32767);
+      steering = constrain(steering, -32767, 0);
+    }
+    else if (smooth > ZONE_CENTER_HIGH) {
+      // ПРАВО: чем больше значение, тем сильнее поворот
+      steering = map(smooth, ZONE_CENTER_HIGH, 4095, 0, 32767);
+      steering = constrain(steering, 0, 32767);
+    }
+    else {
+      // ЦЕНТР: стик по середине
+      steering = 0;
     }
 
-    // Масштабируем отклонение в диапазон оси X (-32767 до 32767)
-    int steering = 0;
-    if (deviation > 0) {
-      // Отклонение вправо
-      steering = map(deviation, 0, 4095 - centerSteeringValue, 0, 32767);
-    } else if (deviation < 0) {
-      // Отклонение влево
-      steering = map(deviation, -centerSteeringValue, 0, -32767, 0);
-    }
-    
     bleGamepad.setX(steering);
 
-    // --- Кнопка газа (R2) – надёжный цифровой метод ---
+    // --- ГАЗ (R2) ---
     bool gasButtonState = digitalRead(gasButtonPin);
-    
+
     if (gasButtonState == LOW && lastGasButtonState == HIGH) {
-      // Кнопка только что нажата
-      gasPressed = true;
-      bleGamepad.press(BUTTON_8);   // Нажимаем кнопку R2
-      Serial.println("ГАЗ НАЖАТ");
-    } 
-    else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
-      // Кнопка только что отпущена
-      gasPressed = false;
-      bleGamepad.release(BUTTON_8); // Отпускаем кнопку R2
-      Serial.println("ГАЗ ОТПУЩЕН");
+      bleGamepad.press(BUTTON_8);
     }
-    
+    else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
+      bleGamepad.release(BUTTON_8);
+    }
+
     lastGasButtonState = gasButtonState;
 
-    // --- Отладочный вывод (значения руля при изменении) ---
-    if (abs(steering - lastReportedSteering) > 500) {
-      if (millis() - lastDebugPrint > debugInterval) {
-        Serial.print("Руль (отклонение): ");
-        Serial.print(deviation);
-        Serial.print(" -> Ось X: ");
-        Serial.println(steering);
-        lastReportedSteering = steering;
-        lastDebugPrint = millis();
-      }
-    }
-
     delay(10);
-  } else {
-    #ifdef ENABLE_LED
-    digitalWrite(ledPin, LOW);
-    #endif
-    delay(1000);
+  }
+  else {
+    delay(500);
   }
 }
