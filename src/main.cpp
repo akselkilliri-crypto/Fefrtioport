@@ -37,7 +37,7 @@ void loop() {
 
     if (raw < ZONE_CENTER_LOW) {
       // ЛЕВО: чем меньше значение, тем сильнее поворот
-      steering = map(raw, ZONE_CENTER_LOW, 0, 0, 32767);
+      steering = map(raw, 0, ZONE_CENTER_LOW, 0, 32767);
       steering = constrain(steering, 0, 32767);
       steering = -steering;  // лево – отрицательные значения оси X
     }
