@@ -3,17 +3,20 @@
 
 // ================= НАСТРОЙКИ =================
 const int steeringWheelPin = 34;  // Аналоговый вход руля
-const int gasButtonPin = 25;      // Кнопка газа
+const int gasButtonPin = 25;      // Кнопка газа (подключена к GND)
 
-// Ширина мёртвой зоны вокруг центра (в отсчётах АЦП, можно менять)
-const int DEAD_ZONE = 150;   // Увеличьте это значение, если руль "дрожит"
+// ★★★ ИЗМЕРЬТЕ И ВСТАВЬТЕ СЮДА СВОИ ЗНАЧЕНИЯ ★★★
+const int MIN_RAW = 0;   // Крайний левый упор
+const int MAX_RAW = 4095;  // Крайний правый упор
+
+// Ширина мёртвой зоны вокруг центра (чем больше, тем меньше дрожи)
+const int DEAD_ZONE = 2026;   // Подберите от 80 до 250
 
 // ====== ОСТАЛЬНОЕ НЕ ТРОГАТЬ ======
 BleGamepad bleGamepad("ESP32 Racing Wheel", "ESP32 Community", 100);
 
-// Центр руля, запомненный при включении
-int centerRaw = 2048;        // будет переопределён в setup()
-int leftLimit, rightLimit;   // границы зон
+int centerRaw;       // запомненный центр
+int leftLimit, rightLimit;
 
 // Газ
 bool lastGasButtonState = HIGH;
@@ -23,8 +26,8 @@ void setup() {
   pinMode(steeringWheelPin, INPUT);
   pinMode(gasButtonPin, INPUT_PULLUP);
 
-  // --- Калибровка центра (не трогайте руль первые секунды!) ---
-  delay(500); // даём питанию устаканиться
+  // --- Калибровка центра (не трогайте руль 1-2 секунды после включения) ---
+  delay(500);
   long sum = 0;
   const int samples = 50;
   for (int i = 0; i < samples; i++) {
@@ -33,42 +36,32 @@ void setup() {
   }
   centerRaw = sum / samples;
 
-  // Вычисляем границы зон относительно центра
-  leftLimit  = centerRaw - DEAD_ZONE;   // всё, что меньше – лево
-  rightLimit = centerRaw + DEAD_ZONE;   // всё, что больше – право
+  leftLimit  = centerRaw - DEAD_ZONE;
+  rightLimit = centerRaw + DEAD_ZONE;
 
-  Serial.print("Центр откалиброван: ");
-  Serial.println(centerRaw);
-  Serial.print("Левая зона: 0 ... ");
-  Serial.println(leftLimit);
-  Serial.print("Центральная зона: ");
-  Serial.print(leftLimit);
-  Serial.print(" ... ");
-  Serial.println(rightLimit);
-  Serial.print("Правая зона: ");
-  Serial.print(rightLimit);
-  Serial.println(" ... 4095");
+  Serial.print("Центр: "); Serial.println(centerRaw);
+  Serial.print("Левая зона: "); Serial.print(MIN_RAW); Serial.print(" ... "); Serial.println(leftLimit);
+  Serial.print("Правая зона: "); Serial.print(rightLimit); Serial.print(" ... "); Serial.println(MAX_RAW);
 
   bleGamepad.begin();
-  Serial.println("BLE Gamepad готов (без фильтра, с автокалибровкой)");
+  Serial.println("BLE Gamepad готов");
 }
 
 void loop() {
   if (bleGamepad.isConnected()) {
 
-    // --- РУЛЬ (без фильтра) ---
+    // --- РУЛЬ ---
     int raw = analogRead(steeringWheelPin);
-
     int steering = 0;
 
     if (raw < leftLimit) {
-      // ЛЕВО: масштабируем от leftLimit (центр) до 0 (крайне левое положение)
-      steering = map(raw, leftLimit, 0, -32767, 0);
+      // ЛЕВО: шкала от leftLimit до MIN_RAW -> -32767..0
+      steering = map(raw, leftLimit, MIN_RAW, 0, -32767);
       steering = constrain(steering, -32767, 0);
     }
     else if (raw > rightLimit) {
-      // ПРАВО: масштабируем от rightLimit до 4095 (крайне правое положение)
-      steering = map(raw, rightLimit, 4095, 0, 32767);
+      // ПРАВО: шкала от rightLimit до MAX_RAW -> 0..32767
+      steering = map(raw, rightLimit, MAX_RAW, 0, 32767);
       steering = constrain(steering, 0, 32767);
     }
     else {
@@ -80,21 +73,16 @@ void loop() {
 
     // --- ГАЗ (R2) ---
     bool gasButtonState = digitalRead(gasButtonPin);
-
     if (gasButtonState == LOW && lastGasButtonState == HIGH) {
       bleGamepad.press(BUTTON_8);
     }
     else if (gasButtonState == HIGH && lastGasButtonState == LOW) {
       bleGamepad.release(BUTTON_8);
     }
-
     lastGasButtonState = gasButtonState;
 
-    // --- Диагностика (вывод в Serial) ---
-    Serial.print("RAW: ");
-    Serial.print(raw);
-    Serial.print(" -> Steering: ");
-    Serial.println(steering);
+    // Отладка (раскомментируйте, если нужно)
+    // Serial.print("RAW: "); Serial.print(raw); Serial.print(" -> "); Serial.println(steering);
 
     delay(10);
   }
