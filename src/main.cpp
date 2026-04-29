@@ -1,13 +1,10 @@
 #include <Arduino.h>
 #include <BleGamepad.h>
 
-// ================= НАСТРОЙКИ (Меняйте при необходимости) =================
-// Пины
-const int steeringWheelPin = 34;  // Аналоговый вход для руля (подстроечный резистор 10 кОм)
+// ================= НАСТРОЙКИ (меняйте при необходимости) =================
+const int steeringWheelPin = 34;  // Аналоговый вход руля (подстроечный резистор 10 кОм)
 const int gasButtonPin = 25;      // Кнопка газа (подключена к GND, используется внутренняя подтяжка)
-
-// Номер кнопки геймпада для газа (можно изменить на BUTTON_2 и т.д.)
-const uint8_t gasButtonNumber = BUTTON_1;
+// Правый триггер (R2) управляется кнопкой газа: при нажатии отправляется максимальное значение
 
 // Опциональный светодиод на GPIO 2 (раскомментируйте строку ниже, если подключили)
 // #define ENABLE_LED
@@ -66,11 +63,13 @@ void loop() {
     int steering = map(average, 0, 4095, -32767, 32767);
     bleGamepad.setX(steering);
 
-    // --- Педаль газа ---
+    // --- Правый триггер (газ) ---
     if (digitalRead(gasButtonPin) == LOW) {
-      bleGamepad.press(gasButtonNumber);
+      // Кнопка нажата – эмулируем полностью нажатый правый триггер (R2)
+      bleGamepad.setRightTrigger(1023);
     } else {
-      bleGamepad.release(gasButtonNumber);
+      // Отпущена – триггер в нуле
+      bleGamepad.setRightTrigger(0);
     }
 
     delay(10);
